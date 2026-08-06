@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>btch-downloader-api · endpoint tester</title>
+<style>
+  :root {
+    --bg: #0b0f0e;
+    --panel: #101614;
+    --line: #1f2b27;
+    --text: #dce8e3;
+    --muted: #6f8680;
+    --accent: #3ddc97;
+    --accent-dim: #234a3b;
+    --error: #ff6b5e;
+    --mono: "JetBrains Mono", "SFMono-Regular", Consolas, Menlo, monospace;
+    --sans: "Inter", "Segoe UI", system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+  }
+
+  img, svg, pre, select, input, .endpoint-line {
+    max-width: 100%;
+  }
+
+  html { -webkit-text-size-adjust: 100%; }
+
+  .wrap {
+    max-width: 780px;
+    margin: 0 auto;
+    width: 100%;
+    padding: clamp(24px, 6vw, 48px) clamp(14px, 4vw, 20px) 80px;
+  }
+
+  header {
+    margin-bottom: 32px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 24px;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 10px;
+  }
+
+  h1 {
+    font-size: clamp(20px, 5vw, 26px);
+    margin: 0 0 8px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  header p {
+    color: var(--muted);
+    margin: 0;
+    font-size: clamp(13px, 3.5vw, 14px);
+    line-height: 1.6;
+  }
+
+  .status-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 16px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--muted);
+  }
+  .dot.up { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  .dot.down { background: var(--error); box-shadow: 0 0 8px var(--error); }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: clamp(16px, 4vw, 24px);
+    margin-bottom: 20px;
+    width: 100%;
+  }
+
+  label {
+    display: block;
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+
+  select, input {
+    width: 100%;
+    max-width: 100%;
+    background: #0d1412;
+    border: 1px solid var(--line);
+    color: var(--text);
+    padding: 12px 14px;
+    border-radius: 7px;
+    font-family: var(--mono);
+    /* 16px minimum stops iOS Safari from auto-zooming the page on focus */
+    font-size: 16px;
+    outline: none;
+    transition: border-color 0.15s ease;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+
+  select:focus, input:focus {
+    border-color: var(--accent);
+  }
+
+  .row { margin-bottom: 16px; }
+
+  .example {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 6px;
+  }
+
+  button {
+    width: 100%;
+    background: var(--accent);
+    color: #06110d;
+    border: none;
+    padding: 13px;
+    border-radius: 7px;
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    transition: filter 0.15s ease;
+  }
+
+  button:hover { filter: brightness(1.08); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .endpoint-line {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    background: #0d1412;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    padding: 10px 12px;
+    margin-top: 14px;
+    word-break: break-all;
+  }
+  .endpoint-line .method { color: var(--accent); font-weight: 600; }
+
+  .result-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .result-header h2 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin: 0;
+    font-family: var(--mono);
+  }
+
+  .badge {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 3px 9px;
+    border-radius: 20px;
+    border: 1px solid var(--line);
+  }
+  .badge.ok { color: var(--accent); border-color: var(--accent-dim); background: rgba(61,220,151,0.08); }
+  .badge.err { color: var(--error); border-color: #4a2622; background: rgba(255,107,94,0.08); }
+
+  pre {
+    background: #0d1412;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    padding: 14px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    font-family: var(--mono);
+    font-size: clamp(11.5px, 3vw, 12.5px);
+    line-height: 1.6;
+    margin: 0;
+    max-width: 100%;
+    max-height: min(420px, 55vh);
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .empty-state {
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 13px;
+    text-align: center;
+    padding: 20px 0;
+  }
+
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    margin-top: 40px;
+  }
+  footer a { color: var(--accent); text-decoration: none; }
+
+  /* Small phones: tighten spacing further and let the footer link wrap cleanly */
+  @media (max-width: 420px) {
+    .wrap { padding-bottom: 56px; }
+    header { margin-bottom: 24px; padding-bottom: 18px; }
+    .badge { font-size: 10.5px; padding: 3px 8px; }
+    footer { padding: 0 4px; word-break: break-word; }
+  }
+
+  /* Short/landscape viewports: don't let the JSON panel eat the whole screen */
+  @media (max-height: 480px) {
+    pre { max-height: 40vh; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <p class="eyebrow">// btch-downloader-api</p>
+      <h1>Endpoint tester</h1>
+      <p>Pick a platform, paste a public URL (or search query), and fetch the raw JSON response the API returns.</p>
+      <div class="status-row">
+        <span class="dot" id="statusDot"></span>
+        <span id="statusText">checking server…</span>
+      </div>
+    </header>
+
+    <div class="panel">
+      <div class="row">
+        <label for="platform">Platform</label>
+        <select id="platform"></select>
+      </div>
+
+      <div class="row">
+        <label for="input" id="inputLabel">Url</label>
+        <input id="input" type="text" placeholder="Paste a link here…" autocomplete="off" />
+        <p class="example" id="exampleText"></p>
+      </div>
+
+      <button id="fetchBtn">Fetch</button>
+
+      <div class="endpoint-line" id="endpointLine"></div>
+    </div>
+
+    <div class="panel">
+      <div class="result-header">
+        <h2>Response</h2>
+        <span class="badge" id="resultBadge" style="display:none;"></span>
+      </div>
+      <pre id="resultBox"><span class="empty-state">No request made yet.</span></pre>
+    </div>
+
+    <footer>Local dev tester · calls <a href="/api/platforms" target="_blank">/api/platforms</a> and <a href="/api/health" target="_blank">/api/health</a></footer>
+  </div>
+
+<script>
+  const platformSelect = document.getElementById("platform");
+  const inputEl = document.getElementById("input");
+  const inputLabel = document.getElementById("inputLabel");
+  const exampleText = document.getElementById("exampleText");
+  const fetchBtn = document.getElementById("fetchBtn");
+  const endpointLine = document.getElementById("endpointLine");
+  const resultBox = document.getElementById("resultBox");
+  const resultBadge = document.getElementById("resultBadge");
+  const statusDot = document.getElementById("statusDot");
+  const statusText = document.getElementById("statusText");
+
+  let platforms = {};
+
+  function paramName(queryType) {
+    return queryType === "query" ? "query" : "url";
+  }
+
+  function updateInputUI() {
+    const key = platformSelect.value;
+    const cfg = platforms[key];
+    if (!cfg) return;
+    const p = paramName(cfg.queryType);
+    inputLabel.textContent = cfg.queryType === "url_or_query" ? "Url or search query" : p === "query" ? "Search query" : "Url";
+    inputEl.placeholder = cfg.example;
+    exampleText.textContent = "e.g. " + cfg.example;
+    updateEndpointLine();
+  }
+
+  function updateEndpointLine() {
+    const key = platformSelect.value;
+    const cfg = platforms[key];
+    if (!cfg) return;
+    const p = paramName(cfg.queryType);
+    const val = inputEl.value.trim() || `{${p}}`;
+    endpointLine.innerHTML = `<span class="method">GET</span> /api/download/${key}?${p}=${encodeURIComponent(val)}`;
+  }
+
+  async function loadPlatforms() {
+    try {
+      const res = await fetch("/api/platforms");
+      const data = await res.json();
+      platforms = Object.fromEntries(data.platforms.map((p) => [p.key, p]));
+      platformSelect.innerHTML = Object.keys(platforms)
+        .map((key) => `<option value="${key}">${key}</option>`)
+        .join("");
+      updateInputUI();
+    } catch (err) {
+      endpointLine.textContent = "Could not load platform list — is the server running?";
+    }
+  }
+
+  async function checkHealth() {
+    try {
+      const res = await fetch("/api/health");
+      if (res.ok) {
+        statusDot.classList.add("up");
+        statusText.textContent = "server online";
+      } else {
+        throw new Error();
+      }
+    } catch {
+      statusDot.classList.add("down");
+      statusText.textContent = "server unreachable";
+    }
+  }
+
+  async function runFetch() {
+    const key = platformSelect.value;
+    const cfg = platforms[key];
+    const value = inputEl.value.trim();
+
+    if (!value) {
+      inputEl.focus();
+      return;
+    }
+
+    fetchBtn.disabled = true;
+    fetchBtn.textContent = "Fetching…";
+    resultBadge.style.display = "none";
+    resultBox.innerHTML = '<span class="empty-state">Loading…</span>';
+
+    const p = paramName(cfg.queryType);
+    const url = `/api/download/${key}?${p}=${encodeURIComponent(value)}`;
+
+    try {
+      const res = await fetch(url);
+      const data = await res.json();
+
+      resultBadge.style.display = "inline-block";
+      resultBadge.textContent = res.status + (data.success ? " success" : " error");
+      resultBadge.className = "badge " + (data.success ? "ok" : "err");
+
+      resultBox.textContent = JSON.stringify(data, null, 2);
+    } catch (err) {
+      resultBadge.style.display = "inline-block";
+      resultBadge.textContent = "network error";
+      resultBadge.className = "badge err";
+      resultBox.textContent = String(err);
+    } finally {
+      fetchBtn.disabled = false;
+      fetchBtn.textContent = "Fetch";
+    }
+  }
+
+  platformSelect.addEventListener("change", updateInputUI);
+  inputEl.addEventListener("input", updateEndpointLine);
+  inputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") runFetch(); });
+  fetchBtn.addEventListener("click", runFetch);
+
+  loadPlatforms();
+  checkHealth();
+</script>
+</body>
+</html>

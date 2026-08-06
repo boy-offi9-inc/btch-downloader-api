@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Syntax-check source files
+        run: |
+          for f in $(find src api -name "*.js"); do
+            node --check "$f"
+          done
+
+      - name: Boot the server as a smoke test
+        run: |
+          npm start &
+          SERVER_PID=$!
+          sleep 3
+          curl --fail http://localhost:3000/api/health
+          kill $SERVER_PID

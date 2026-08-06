@@ -1,0 +1,39 @@
+{
+  "name": "@boy-offi9-inc/btch-downloader-api",
+  "version": "1.0.0",
+  "description": "A simple, well-structured REST API wrapping the btch-downloader library, with a built-in frontend tester for all endpoints.",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "keywords": [
+    "btch-downloader",
+    "downloader",
+    "api",
+    "express",
+    "tiktok",
+    "instagram",
+    "youtube",
+    "spotify"
+  ],
+  "author": "Boy Offi9",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "btch-downloader": "^6.0.32",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.4.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

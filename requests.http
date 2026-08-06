@@ -1,0 +1,31 @@
+@baseUrl = http://localhost:3000
+
+### Health check
+GET {{baseUrl}}/api/health
+
+### List supported platforms
+GET {{baseUrl}}/api/platforms
+
+### TikTok
+GET {{baseUrl}}/api/download/tiktok?url=https://www.tiktok.com/@user/video/1234567890
+
+### All-in-one (auto-detects platform)
+GET {{baseUrl}}/api/download/aio?url=https://www.tiktok.com/@user/video/1234567890
+
+### Instagram
+GET {{baseUrl}}/api/download/instagram?url=https://www.instagram.com/reel/xxxxxxxxxxx/
+
+### YouTube
+GET {{baseUrl}}/api/download/youtube?url=https://youtu.be/xxxxxxxxxxx
+
+### YouTube search (query-based platform)
+GET {{baseUrl}}/api/download/youtube-search?query=Somewhere Only We Know
+
+### Spotify
+GET {{baseUrl}}/api/download/spotify?url=https://open.spotify.com/track/xxxxxxxxxxxxxxxxxxxxxx
+
+### Unsupported platform (expect 404)
+GET {{baseUrl}}/api/download/not-a-real-platform?url=https://example.com
+
+### Missing query param (expect 400)
+GET {{baseUrl}}/api/download/tiktok

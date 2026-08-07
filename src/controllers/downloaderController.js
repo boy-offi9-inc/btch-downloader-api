@@ -14,17 +14,36 @@ const ApiError = require("../utils/ApiError");
    and supported URL formats.
 */
 
+// Log at startup which expected downloader functions are available vs missing.
+(function logAvailableDownloaders() {
+  try {
+    const available = Object.keys(btch).filter((k) => typeof btch[k] === "function");
+    const expected = Object.values(PLATFORMS).map((p) => p.fn);
+    const missing = expected.filter((fn) => !available.includes(fn));
+    if (missing.length) {
+      console.warn("btch-downloader: missing expected functions:", missing);
+    }
+    console.debug("btch-downloader: available functions:", available);
+  } catch (e) {
+    console.warn("btch-downloader: could not inspect exports", e.message);
+  }
+})();
+
 /**
  * GET /api/platforms
  * Returns the list of supported platforms — used by the frontend to build its dropdown.
+ * Only returns platforms for which the underlying btch-downloader package exposes the
+ * configured function. This avoids advertising routes that will 404 at runtime.
  */
 function listPlatforms(req, res) {
-  const platforms = Object.entries(PLATFORMS).map(([key, value]) => ({
-    key,
-    queryType: value.queryType,
-    example: value.example,
-    ...(value.note ? { note: value.note } : {}),
-  }));
+  const platforms = Object.entries(PLATFORMS)
+    .filter(([key, cfg]) => typeof btch[cfg.fn] === "function")
+    .map(([key, value]) => ({
+      key,
+      queryType: value.queryType,
+      example: value.example,
+      ...(value.note ? { note: value.note } : {}),
+    }));
   res.json({ success: true, count: platforms.length, platforms });
 }
 
@@ -66,7 +85,9 @@ async function download(req, res) {
 
   const fn = btch[config.fn];
   if (typeof fn !== "function") {
-    throw new ApiError(500, `Downloader function "${config.fn}" is not available in btch-downloader.`);
+    // Provide a clearer message including available functions for debugging.
+    const available = Object.keys(btch).filter((k) => typeof btch[k] === "function");
+    throw new ApiError(404, `Downloader function "${config.fn}" is not available in btch-downloader. Available: ${available.join(", ")}`);
   }
 
   // Normalize a few common URL shapes so downstream downloaders (like YouTube)

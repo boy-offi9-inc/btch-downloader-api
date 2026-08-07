@@ -4,6 +4,12 @@ A small, well-structured REST API that wraps the [`btch-downloader`](https://www
 
 Fetch public media info/download links from TikTok, Instagram, YouTube, Spotify, Pinterest, SoundCloud, Facebook, Twitter/X, Google Drive, MediaFire, CapCut, Douyin, Xiaohongshu, SnackVideo, and Cocofun — plus an `aio` endpoint that auto-detects the platform from the URL — all through one consistent JSON API.
 
+
+**External resources (official btch-downloader project)**
+
+- GitHub: https://github.com/hostinger-bot/btch-downloader
+- npm: https://www.npmjs.com/package/btch-downloader
+
 ---
 
 ## Features
@@ -186,33 +192,3 @@ The Express app itself (`src/app.js`) is identical across every target below —
 
 1. Import the repo in Vercel. `vercel.json` routes `/api/*` to the serverless function at `api/index.js` (which just re-exports the same Express app) and serves `public/` as static files directly.
 2. No build command needed — Vercel's `@vercel/node` builder bundles `api/index.js` and its dependencies automatically.
-3. Add environment variables from `.env.example` in the Vercel project settings. Note: serverless functions are stateless per-invocation, so the in-memory rate limiter resets between cold starts — fine for personal/testing use, but swap in a shared store (e.g. Redis) if you need strict limits in production.
-
-### Docker (self-hosted / any provider)
-
-```bash
-docker build -t btch-downloader-api .
-docker run -p 3000:3000 --env-file .env btch-downloader-api
-```
-
-The image includes a container-level health check that pings `/api/health`.
-
----
-
-## Adding a new platform
-
-1. Add an entry to `src/config/platforms.js` with the library's exported function name.
-2. That's it — the route, controller, error handling, and frontend dropdown all read from that config automatically.
-
----
-
-## Notes & disclaimers
-
-- Only works with **publicly accessible** media. It cannot bypass private accounts or login walls.
-- This project isn't affiliated with or endorsed by TikTok, Instagram, YouTube, Spotify, or any other platform listed above.
-- Make sure you have the right or permission to download any media you fetch through this API.
-- `btch-downloader` is a third-party library; if a platform changes its internal API, that specific downloader may temporarily break upstream.
-
-## License
-
-MIT

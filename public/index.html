@@ -309,6 +309,41 @@
 
   let platforms = {};
 
+  // Ordered so a more specific host match wins before a looser one.
+  const DETECT_PATTERNS = [
+    [/tiktok\.com/i, "tiktok"],
+    [/instagram\.com/i, "instagram"],
+    [/(facebook\.com|fb\.watch)/i, "facebook"],
+    [/(twitter\.com|x\.com)/i, "twitter"],
+    [/(youtube\.com|youtu\.be)/i, "youtube"],
+    [/open\.spotify\.com/i, "spotify"],
+    [/soundcloud\.com/i, "soundcloud"],
+    [/(pinterest\.[a-z.]+|pin\.it)/i, "pinterest"],
+    [/mediafire\.com/i, "mediafire"],
+    [/drive\.google\.com/i, "gdrive"],
+    [/capcut\.com/i, "capcut"],
+    [/douyin\.com/i, "douyin"],
+    [/(xiaohongshu\.com|xhslink\.com)/i, "xiaohongshu"],
+    [/snackvideo\.com/i, "snackvideo"],
+    [/(icocofun\.com|cocofun\.com)/i, "cocofun"],
+  ];
+
+  function detectPlatform(value) {
+    if (!/^https?:\/\//i.test(value.trim())) return null;
+    for (const [pattern, key] of DETECT_PATTERNS) {
+      if (pattern.test(value) && platforms[key]) return key;
+    }
+    return null;
+  }
+
+  function maybeAutoSelect() {
+    const detected = detectPlatform(inputEl.value);
+    if (detected && platformSelect.value !== detected) {
+      platformSelect.value = detected;
+      updateInputUI();
+    }
+  }
+
   function paramName(queryType) {
     return queryType === "query" ? "query" : "url";
   }
@@ -401,7 +436,10 @@
   }
 
   platformSelect.addEventListener("change", updateInputUI);
-  inputEl.addEventListener("input", updateEndpointLine);
+  inputEl.addEventListener("input", () => {
+    maybeAutoSelect();
+    updateEndpointLine();
+  });
   inputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") runFetch(); });
   fetchBtn.addEventListener("click", runFetch);
 

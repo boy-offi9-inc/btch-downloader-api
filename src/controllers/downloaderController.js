@@ -2,6 +2,18 @@ const btch = require("btch-downloader");
 const { PLATFORMS } = require("../config/platforms");
 const ApiError = require("../utils/ApiError");
 
+/*
+ Official btch-downloader documentation & project links:
+ - GitHub: https://github.com/hostinger-bot/btch-downloader
+ - npm:    https://www.npmjs.com/package/btch-downloader
+
+ Notes:
+ - The controller uses the btch-downloader package (see links above) and
+   delegates platform-specific work to the library's exported functions.
+ - See the library README for details about the `aio` (auto-detect) function
+   and supported URL formats.
+*/
+
 /**
  * GET /api/platforms
  * Returns the list of supported platforms — used by the frontend to build its dropdown.

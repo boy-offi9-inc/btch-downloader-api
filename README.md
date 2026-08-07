@@ -2,13 +2,13 @@
 
 A small, well-structured REST API that wraps the [`btch-downloader`](https://www.npmjs.com/package/btch-downloader) library, plus a built-in browser page for testing every endpoint without needing Postman.
 
-Fetch public media info/download links from TikTok, Instagram, YouTube, Spotify, Pinterest, SoundCloud, Facebook, Twitter/X, Google Drive, MediaFire, CapCut, Douyin, Xiaohongshu, SnackVideo, Cocofun, Threads, and Kuaishou — all through one consistent JSON API.
+Fetch public media info/download links from TikTok, Instagram, YouTube, Spotify, Pinterest, SoundCloud, Facebook, Twitter/X, Google Drive, MediaFire, CapCut, Douyin, Xiaohongshu, SnackVideo, and Cocofun — plus an `aio` endpoint that auto-detects the platform from the URL — all through one consistent JSON API.
 
 ---
 
 ## Features
 
-- 🎯 One generic route (`/api/download/:platform`) handles all 18 supported platforms
+- 🎯 One generic route (`/api/download/:platform`) handles all 17 supported platforms
 - 🧩 Adding a new platform is a one-line change (`src/config/platforms.js`)
 - 🛡️ Centralized error handling, input validation, and rate limiting
 - 🧪 Static frontend tester served at `/` — no separate frontend project needed, fully responsive from small phones to desktop
@@ -107,7 +107,7 @@ Lists every supported platform, its expected query type, and an example input. T
 ```json
 {
   "success": true,
-  "count": 18,
+  "count": 17,
   "platforms": [
     { "key": "tiktok", "queryType": "url", "example": "https://www.tiktok.com/@user/video/1234567890" },
     { "key": "youtube-search", "queryType": "query", "example": "Somewhere Only We Know" }

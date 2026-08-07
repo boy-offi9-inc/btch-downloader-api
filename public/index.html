@@ -329,9 +329,14 @@
   ];
 
   function detectPlatform(value) {
-    if (!/^https?:\/\//i.test(value.trim())) return null;
+    const v = String(value || '').trim();
+    if (!v) return null;
+    // Allow pasted links without a protocol (e.g. "youtube.com/...") by
+    // prepending a dummy http:// when testing patterns.
+    const testValue = /^https?:\/\//i.test(v) ? v : 'http://' + v;
+
     for (const [pattern, key] of DETECT_PATTERNS) {
-      if (pattern.test(value) && platforms[key]) return key;
+      if (pattern.test(testValue) && platforms[key]) return key;
     }
     return null;
   }
@@ -373,10 +378,15 @@
       const res = await fetch("/api/platforms");
       const data = await res.json();
       platforms = Object.fromEntries(data.platforms.map((p) => [p.key, p]));
-      platformSelect.innerHTML = Object.keys(platforms)
+      const keys = Object.keys(platforms);
+      platformSelect.innerHTML = keys
         .map((key) => `<option value="${key}">${key}</option>`)
         .join("");
+      // Ensure a sensible default is selected (first platform) so auto-detect can set correctly.
+      if (!keys.includes(platformSelect.value)) platformSelect.value = keys[0] || "";
       updateInputUI();
+      // Try auto-selecting now in case the user pasted before platforms finished loading.
+      maybeAutoSelect();
     } catch (err) {
       endpointLine.textContent = "Could not load platform list — is the server running?";
     }
@@ -440,6 +450,10 @@
     maybeAutoSelect();
     updateEndpointLine();
   });
+  // Ensure pasted content triggers detection after the input value is updated by the browser.
+  inputEl.addEventListener("paste", () => setTimeout(() => { maybeAutoSelect(); updateEndpointLine(); }, 0));
+  // Also handle drops onto the input (drag & drop)
+  inputEl.addEventListener("drop", () => setTimeout(() => { maybeAutoSelect(); updateEndpointLine(); }, 0));
   inputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") runFetch(); });
   fetchBtn.addEventListener("click", runFetch);
 

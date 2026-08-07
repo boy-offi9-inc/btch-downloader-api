@@ -17,6 +17,24 @@ function listPlatforms(req, res) {
 }
 
 /**
+ * Helper: normalize known URL forms that btch-downloader expects in a specific shape.
+ * Currently normalizes YouTube "shorts" and youtu.be short links to the canonical
+ * https://www.youtube.com/watch?v=<id> form.
+ */
+function normalizeInputForDownloader(input) {
+  let v = String(input || "").trim();
+  if (!v) return v;
+
+  // Normalize youtu.be/<id> -> https://www.youtube.com/watch?v=<id>
+  v = v.replace(/^(?:https?:\/\/)?(?:www\.)?youtu\.be\/([^?&/]+).*$/i, "https://www.youtube.com/watch?v=$1");
+
+  // Normalize youtube.com/shorts/<id> -> https://www.youtube.com/watch?v=<id>
+  v = v.replace(/^(?:https?:\/\/)?(?:www\.)?youtube\.com\/shorts\/([^?&/]+).*$/i, "https://www.youtube.com/watch?v=$1");
+
+  return v;
+}
+
+/**
  * GET /api/download/:platform?url=...  (or ?query=... for search-based platforms)
  * Generic handler shared by every platform route.
  */
@@ -39,12 +57,34 @@ async function download(req, res) {
     throw new ApiError(500, `Downloader function "${config.fn}" is not available in btch-downloader.`);
   }
 
-  const data = await fn(input.trim());
+  // Normalize a few common URL shapes so downstream downloaders (like YouTube)
+  // receive the canonical form they expect and avoid confusing errors such as
+  // "Invalid search API response" when callers pass a shorts/ or youtu.be link.
+  const rawQuery = input.trim();
+  let normalizedQuery = rawQuery;
+  // Only apply the YouTube normalizations when the platform is youtube or aio —
+  // aio delegates to platform-specific downloaders and benefits from the same fix.
+  if (/(youtube|aio)/i.test(platform)) {
+    normalizedQuery = normalizeInputForDownloader(rawQuery);
+  }
+
+  const data = await fn(normalizedQuery);
+
+  // btch-downloader sometimes returns an object containing an `error` property
+  // or a `status: false` result instead of throwing. Map those to a consistent
+  // API error response so clients get a helpful message and proper HTTP status.
+  if (data && (data.error || data.status === false || data.success === false)) {
+    const message =
+      (typeof data.error === "string" && data.error) ||
+      (data.error && data.error.message) ||
+      "Downloader returned an error";
+    throw new ApiError(502, message);
+  }
 
   res.json({
     success: true,
     platform,
-    query: input.trim(),
+    query: rawQuery,
     result: data,
   });
 }

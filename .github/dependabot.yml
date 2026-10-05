@@ -1,0 +1,20 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 5
+    groups:
+      # Everything except the scraper library is batched into one PR to keep
+      # noise down...
+      other-dependencies:
+        patterns: ["*"]
+        exclude-patterns: ["btch-downloader"]
+    # ...while btch-downloader — the dependency that actually breaks when a
+    # provider changes — always gets its own PR, as soon as a release exists.
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly

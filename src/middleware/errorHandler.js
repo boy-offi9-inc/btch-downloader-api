@@ -15,7 +15,7 @@ function errorHandler(err, req, res, next) { // eslint-disable-line no-unused-va
   const statusCode = err.statusCode && err.statusCode >= 400 ? err.statusCode : 500;
 
   if (statusCode === 500) {
-    console.error("[Unhandled Error]", err);
+    console.error(`[Unhandled Error]${req.id ? " id=" + req.id : ""}`, err);
   }
 
   res.status(statusCode).json({
@@ -23,6 +23,7 @@ function errorHandler(err, req, res, next) { // eslint-disable-line no-unused-va
     error: {
       message: err.message || "Internal Server Error",
       statusCode,
+      ...(req.id ? { requestId: req.id } : {}),
     },
   });
 }

@@ -1,12 +1,13 @@
 {
   "name": "@boy-offi9-inc/btch-downloader-api",
-  "version": "1.0.7",
+  "version": "1.1.0",
   "description": "A simple, well-structured REST API wrapping the btch-downloader library, with a built-in frontend tester for all endpoints.",
   "main": "src/index.js",
   "type": "commonjs",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
+    "dev": "nodemon src/index.js",
+    "test": "node --test"
   },
   "keywords": [
     "btch-downloader",

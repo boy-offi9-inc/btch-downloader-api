@@ -25,7 +25,7 @@ function requestLogger(req, res, next) {
     const statusLabel =
       res.statusCode >= 500 ? "\x1b[31m" : res.statusCode >= 400 ? "\x1b[33m" : "\x1b[32m";
     const reset = "\x1b[0m";
-    console.log(`${method} ${path}${truncatedQuery} ${statusLabel}${res.statusCode}${reset} ${durationMs.toFixed(1)}ms`);
+    console.log(`${method} ${path}${truncatedQuery} ${statusLabel}${res.statusCode}${reset} ${durationMs.toFixed(1)}ms${req.id ? " id=" + req.id : ""}`);
   });
 
   next();

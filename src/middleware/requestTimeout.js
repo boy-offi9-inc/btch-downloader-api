@@ -15,7 +15,7 @@ function requestTimeout(timeoutMs = Number(process.env.REQUEST_TIMEOUT_MS) || 30
       if (!res.headersSent) {
         res.status(504).json({
           success: false,
-          error: { message: "Request timed out.", statusCode: 504 },
+          error: { message: "Request timed out.", statusCode: 504, ...(req.id ? { requestId: req.id } : {}) },
         });
       }
     }, timeoutMs);

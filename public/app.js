@@ -499,7 +499,10 @@ function safeStringify(value, indent = 2) {
 
     if (data && data.success === false) {
       const msg = (data.error && data.error.message) || "The request failed.";
-      mediaCards.innerHTML = `<div class="media-error">${esc(msg)}</div>`;
+      const rid = data.error && data.error.requestId;
+      mediaCards.innerHTML =
+        `<div class="media-error">${esc(msg)}</div>` +
+        (rid ? `<p class="example">Request ID: ${esc(rid)}</p>` : "");
       return;
     }
     if (!data || !data.success || !data.result) {

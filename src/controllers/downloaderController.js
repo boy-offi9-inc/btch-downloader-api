@@ -4,6 +4,7 @@ const { PLATFORMS } = require("../config/platforms");
 const ApiError = require("../utils/ApiError");
 const { requireInputForQueryType, requireHttpUrl, requireNonEmptyString } = require("../utils/validate");
 const withTimeout = require("../utils/withTimeout");
+const TtlCache = require("../utils/ttlCache");
 const { normalizeResult, truncateListResult, hasHandler } = require("../utils/normalizeResult");
 
 // Applies to platforms with `supportsLimit: true` (youtube-search, pinterest
@@ -13,6 +14,21 @@ const { normalizeResult, truncateListResult, hasHandler } = require("../utils/no
 // unbounded list on every request.
 const LIST_LIMIT_DEFAULT = 5;
 const LIST_LIMIT_MAX = 50;
+
+// Short-lived cache of successful /api/download responses, keyed by
+// platform + input + limit. Cuts repeat upstream calls (and the rate-limiting
+// that comes with them). Only successes are stored. Set CACHE_TTL_MS=0 to
+// turn it off. Keep the TTL short: upstream media links can expire.
+function envInt(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+const downloadCache = new TtlCache({
+  ttlMs: envInt("CACHE_TTL_MS", 300_000),
+  maxEntries: envInt("CACHE_MAX_ENTRIES", 200),
+});
 
 function parseLimit(rawLimit) {
   const n = Number.parseInt(rawLimit, 10);
@@ -136,6 +152,14 @@ async function download(req, res) {
   }
   const rawQuery = requireInputForQueryType(input, config.queryType, paramName);
 
+  const appliedLimit = config.supportsLimit ? parseLimit(req.query.limit) : null;
+  const cacheKey = JSON.stringify([platform, rawQuery, appliedLimit]);
+  const cached = downloadCache.get(cacheKey);
+  if (cached) {
+    res.set("X-Cache", "HIT");
+    return res.json(cached);
+  }
+
   const fn = btch[config.fn];
   if (typeof fn !== "function") {
     // Provide a clearer message including available functions for debugging.
@@ -176,7 +200,9 @@ async function download(req, res) {
       if (err.message.endsWith("took too long to respond.")) {
         throw new ApiError(504, err.message);
       }
-      lastError = err;
+      // A plain Error here is the upstream/library failing, not our server
+      // crashing — report it as a 502 instead of a generic 500.
+      lastError = err instanceof ApiError ? err : new ApiError(502, `The ${platform} source failed: ${err.message || "unknown error"}`);
       continue;
     }
 
@@ -216,12 +242,11 @@ async function download(req, res) {
   // the raw JSON and the normalized view agree, and a query that could
   // return dozens of hits doesn't ship (and force the client to render) all
   // of them by default.
-  const appliedLimit = config.supportsLimit ? parseLimit(req.query.limit) : null;
   if (appliedLimit !== null) {
     truncateListResult(platform, data, appliedLimit);
   }
 
-  res.json({
+  const body = {
     success: true,
     platform,
     query: rawQuery,
@@ -234,7 +259,11 @@ async function download(req, res) {
     // frontend falls back to its generic parser in that case.
     result: data,
     normalized: normalizeResult(platform, data),
-  });
+  };
+
+  downloadCache.set(cacheKey, body);
+  if (downloadCache.enabled) res.set("X-Cache", "MISS");
+  res.json(body);
 }
 
 /**
@@ -372,4 +401,4 @@ async function fetchMedia(req, res) {
   Readable.fromWeb(upstream.body).pipe(res);
 }
 
-module.exports = { listPlatforms, download, fetchMedia };
+module.exports = { listPlatforms, download, fetchMedia, downloadCache };

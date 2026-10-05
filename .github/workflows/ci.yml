@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install
+        run: npm install --no-audit --no-fund
+      - name: Tests
+        run: npm test
+      - name: Smoke test (server boots and /api/health answers)
+        run: |
+          PORT=3100 node src/index.js &
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            curl -fsS http://localhost:3100/api/health && exit 0
+            sleep 1
+          done
+          echo "Server did not become healthy" && exit 1

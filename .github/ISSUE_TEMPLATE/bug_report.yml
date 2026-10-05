@@ -1,0 +1,77 @@
+name: Bug report
+description: A download failed, or the API returned something unexpected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! The more of the fields below you fill in, the faster this gets fixed.
+        **Only share public links.** Never paste private URLs, cookies or tokens.
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - aio
+        - tiktok
+        - instagram
+        - facebook
+        - twitter
+        - youtube
+        - youtube-search
+        - spotify
+        - soundcloud
+        - pinterest
+        - mediafire
+        - gdrive
+        - capcut
+        - douyin
+        - xiaohongshu
+        - xiaohongshu-profile
+        - snackvideo
+        - cocofun
+        - threads
+        - kuaishou
+    validations:
+      required: true
+  - type: input
+    id: link
+    attributes:
+      label: Link or search query you used
+      placeholder: https://youtu.be/xxxxxxxxxxx
+    validations:
+      required: true
+  - type: textarea
+    id: response
+    attributes:
+      label: API response
+      description: Paste the full JSON (the "Raw response" panel on the page shows it).
+      render: json
+    validations:
+      required: true
+  - type: input
+    id: request-id
+    attributes:
+      label: Request ID
+      description: Shown under error messages on the page, and in the `X-Request-Id` response header. It lets the maintainer find your request in the logs.
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where are you running it?
+      options:
+        - The live demo
+        - Self-hosted (Railway / Render / Vercel / Docker)
+        - Locally (npm start)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "From `/api/health` or package.json, e.g. 1.1.0"

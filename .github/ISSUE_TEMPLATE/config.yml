@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Problem in the underlying library?
+    url: https://github.com/hostinger-bot/btch-downloader/issues
+    about: If the upstream scraper itself is broken for a platform, the fix usually has to land in btch-downloader.

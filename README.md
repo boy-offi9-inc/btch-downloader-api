@@ -49,16 +49,21 @@ btch-downloader-api/
 │   ├── controllers/
 │   │   └── downloaderController.js
 │   ├── middleware/
-│   │   └── errorHandler.js  # 404 + centralized error responses
+│   │   ├── errorHandler.js  # 404 + centralized error responses
+│   │   └── requestId.js     # X-Request-Id on every request
 │   ├── routes/
 │   │   └── downloader.js
 │   ├── utils/
 │   │   ├── ApiError.js
-│   │   └── asyncHandler.js
+│   │   ├── asyncHandler.js
+│   │   └── ttlCache.js      # in-memory response cache
 │   ├── app.js               # Express app factory (no listen — reused by every deploy target)
 │   └── index.js             # Local/Railway/Render entry point (calls app.listen)
-├── .github/workflows/
-│   └── ci.yml                # Syntax check + smoke test on push/PR
+├── test/                     # node:test suite (npm test)
+├── .github/
+│   ├── workflows/ci.yml      # Tests + smoke test on push/PR
+│   ├── dependabot.yml        # Dependency update PRs
+│   └── ISSUE_TEMPLATE/       # Bug report / feature request forms
 ├── .dockerignore
 ├── .env.example
 ├── .gitignore
@@ -96,6 +101,9 @@ cp .env.example .env
 | `CORS_ORIGIN`              | `*`     | Allowed CORS origin(s)                    |
 | `RATE_LIMIT_WINDOW_MS`     | `60000` | Rate limit window, in milliseconds        |
 | `RATE_LIMIT_MAX`           | `30`    | Max requests per IP per window            |
+| `DOWNLOAD_TIMEOUT_MS`      | `25000` | Max wait for the downloader library       |
+| `CACHE_TTL_MS`             | `300000`| Cache successful downloads this long (`0` = off) |
+| `CACHE_MAX_ENTRIES`        | `200`   | Max cached responses (oldest evicted)     |
 
 ### 3. Run it
 
@@ -112,11 +120,22 @@ Then open **http://localhost:3000** to use the frontend tester, or call the API 
 
 ### `GET /api/health`
 
-Simple liveness check.
+Cheap liveness check — this is what Railway/Render/Docker health checks hit.
 
 ```json
-{ "success": true, "status": "ok", "uptime": 12.4 }
+{ "success": true, "status": "ok", "version": "1.1.0", "uptime": 12.4, "cache": { "size": 3, "hits": 5, "misses": 8 } }
 ```
+
+`GET /api/health?deep=1` also runs one real search through the downloader library to check the **upstream provider** is answering. The result is reused for 60 seconds. If the probe fails you get `503` with `"status": "degraded"` and the reason — point an uptime monitor at this URL to be alerted when scraping breaks.
+
+```json
+{ "success": false, "status": "degraded", "upstream": { "ok": false, "error": "Upstream answered but returned no results.", "latencyMs": 812 } }
+```
+
+### Request IDs and caching
+
+- Every response carries an `X-Request-Id` header (a caller-supplied one is kept if it looks sane). Errors repeat it as `error.requestId`, and it's in the server log line, so a user's report can be matched to the exact request.
+- Successful `/api/download` responses are cached in memory for `CACHE_TTL_MS`. Cached responses carry `X-Cache: HIT` (fresh ones `MISS`). Failures are never cached. On Vercel each serverless instance has its own cache.
 
 ### `GET /api/platforms`
 
@@ -218,6 +237,32 @@ Streams a direct media URL (one returned inside a `/api/download` result) back t
 | `cocofun`            | `cocofun`                 | url                |
 | `threads`            | `threads`                 | url                |
 | `kuaishou`           | `kuaishou`                | url                |
+
+---
+
+## Testing
+
+```bash
+npm test
+```
+
+Uses Node's built-in test runner (no extra dependencies). The downloader library is stubbed, so the suite runs offline and never calls a real provider. CI (`.github/workflows/ci.yml`) runs it on Node 20 and 22 for every push and pull request.
+
+---
+
+## Troubleshooting
+
+**`502` — "…source answered but returned no downloadable links"**
+The upstream provider replied successfully but with nothing usable (this is what issue #1 looked like). It's usually the provider failing or rate-limiting, not your URL. Wait a minute and retry. If it persists, update `btch-downloader` (`npm update btch-downloader`) — scrapers break whenever a site changes — and check `/api/health?deep=1`.
+
+**`504` — "took too long to respond"**
+The provider didn't answer within `DOWNLOAD_TIMEOUT_MS`. Retry, or raise the timeout.
+
+**`429`**
+You hit the rate limit (`RATE_LIMIT_MAX` per `RATE_LIMIT_WINDOW_MS`).
+
+**Reporting a bug**
+Open an issue and include the **Request ID** shown under the error — it lets the maintainer find your request in the logs.
 
 ---
 

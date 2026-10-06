@@ -27,9 +27,9 @@
   "dependencies": {
     "btch-downloader": "^6.4.0",
     "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "express-rate-limit": "^7.4.0"
+    "dotenv": "^18.0.5",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.7.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.4"

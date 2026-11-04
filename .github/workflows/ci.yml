@@ -18,6 +18,8 @@ jobs:
           node-version: ${{ matrix.node }}
       - name: Install
         run: npm install --no-audit --no-fund
+      - name: Lint (syntax check)
+        run: npm run lint
       - name: Tests
         run: npm test
       - name: Smoke test (server boots and /api/health answers)

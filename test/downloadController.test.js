@@ -145,3 +145,111 @@ test("validation: unknown platform is 404, missing input is 400", async () => {
   await assert.rejects(call("youtube", {}), (e) => e.statusCode === 400);
   await assert.rejects(call("youtube", { url: "not a url" }), (e) => e.statusCode === 400);
 });
+
+test("heuristic platform: an empty/odd upstream answer is passed through, not turned into a 502", async () => {
+  stub.spotify = async () => ({ developer: "x", status: true, message: "nothing recognisable" });
+  const res = await call("spotify", { url: "https://open.spotify.com/track/abc" });
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.normalized, null);
+  assert.equal(res.body.result.message, "nothing recognisable");
+});
+
+test("heuristic platform: a recognisable answer is normalized and tagged", async () => {
+  stub.spotify = async () => ({ result: { title: "Song", download: "https://cdn.example/a.mp3" } });
+  const res = await call("spotify", { url: "https://open.spotify.com/track/def" });
+  assert.equal(res.body.normalized.heuristic, true);
+  assert.equal(res.body.normalized.media[0].type, "audio");
+});
+
+test("verified platforms still 502 on an empty answer (heuristic change didn't loosen them)", async () => {
+  stub.ttdl = async () => ({ title: "x" });
+  await assert.rejects(call("tiktok", { url: "https://www.tiktok.com/@u/video/9" }), (e) => e.statusCode === 502);
+});
+
+test("a platform whose library function is missing gives a generic 404 (no export list leaked)", async () => {
+  const saved = stub.cocofun;
+  delete stub.cocofun;
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    await assert.rejects(call("cocofun", { url: "https://www.icocofun.com/share/post/1" }), (e) => e.statusCode === 404 && !/Available/.test(e.message) && !/ttdl/.test(e.message));
+  } finally {
+    console.warn = warn;
+    stub.cocofun = saved;
+  }
+});
+
+test("edge cache: Cache-Control is only sent when EDGE_CACHE_SECONDS is set, on MISS and HIT", async () => {
+  stub.ttdl = async () => ({ title: "x", video: [MP4] });
+  const q = { url: "https://www.tiktok.com/@u/video/55" };
+  const off = await call("tiktok", q);
+  assert.equal(off.headers["Cache-Control"], undefined);
+
+  process.env.EDGE_CACHE_SECONDS = "60";
+  try {
+    const hit = await call("tiktok", q); // served from memory cache
+    assert.equal(hit.headers["X-Cache"], "HIT");
+    assert.equal(hit.headers["Cache-Control"], "public, s-maxage=60");
+    const miss = await call("tiktok", { url: "https://www.tiktok.com/@u/video/56" });
+    assert.equal(miss.headers["Cache-Control"], "public, s-maxage=60");
+  } finally {
+    delete process.env.EDGE_CACHE_SECONDS;
+  }
+});
+
+// --- fetch-media: refusals that must happen BEFORE any network call ---
+const { fetchMedia } = require("../src/controllers/downloaderController");
+
+test("fetch-media: private, loopback and metadata addresses are refused with 400", async () => {
+  for (const url of ["http://127.0.0.1/a.mp4", "http://localhost:3000/x", "http://[::1]/x", "http://169.254.169.254/latest/meta-data", "http://10.0.0.5/x", "http://[::ffff:127.0.0.1]/x", "http://2130706433/x"]) {
+    await assert.rejects(fetchMedia({ query: { url }, id: "t" }, {}), (e) => e.statusCode === 400, url);
+  }
+});
+
+test("fetch-media: non-http(s) and malformed URLs are 400", async () => {
+  for (const url of ["file:///etc/passwd", "ftp://example.com/x", "not a url"]) {
+    await assert.rejects(fetchMedia({ query: { url } }, {}), (e) => e.statusCode === 400, url);
+  }
+});
+
+test("fetch-media: FETCH_MEDIA_ALLOWED_HOSTS rejects hosts outside the list before connecting", async () => {
+  process.env.FETCH_MEDIA_ALLOWED_HOSTS = "googlevideo.com";
+  try {
+    await assert.rejects(fetchMedia({ query: { url: "https://example.com/a.mp4" } }, {}), (e) => e.statusCode === 400 && /allowlist/.test(e.message));
+  } finally {
+    delete process.env.FETCH_MEDIA_ALLOWED_HOSTS;
+  }
+});
+
+test("dedupe: concurrent identical requests share ONE upstream call", async () => {
+  let calls = 0;
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  stub.ttdl = async () => { calls += 1; await gate; return { title: "x", video: [MP4] }; };
+  const q = { url: "https://www.tiktok.com/@u/video/777" };
+  const pending = [call("tiktok", q), call("tiktok", q), call("tiktok", q)];
+  await new Promise((r) => setTimeout(r, 20));
+  release();
+  const results = await Promise.all(pending);
+  assert.equal(calls, 1);
+  assert.ok(results.every((r) => r.body.success === true));
+});
+
+test("dedupe: a failed shared call fails every waiter, and the next request starts fresh", async () => {
+  let calls = 0;
+  stub.ttdl = async () => { calls += 1; if (calls === 1) throw new Error("down"); return { title: "x", video: [MP4] }; };
+  const q = { url: "https://www.tiktok.com/@u/video/778" };
+  const [a, b] = await Promise.allSettled([call("tiktok", q), call("tiktok", q)]);
+  assert.equal(a.status, "rejected");
+  assert.equal(b.status, "rejected");
+  assert.equal(calls, 1);
+  const ok = await call("tiktok", q);
+  assert.equal(ok.body.success, true);
+});
+
+test("dedupe: different limits are different calls", async () => {
+  let calls = 0;
+  stub.yts = async () => { calls += 1; return searchResult(); };
+  await Promise.all([call("youtube-search", { query: "k", limit: "2" }), call("youtube-search", { query: "k", limit: "3" })]);
+  assert.equal(calls, 2);
+});

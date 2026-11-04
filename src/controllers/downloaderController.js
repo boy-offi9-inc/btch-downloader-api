@@ -1,11 +1,15 @@
-const { Readable } = require("stream");
+const http = require("node:http");
+const https = require("node:https");
+const { Transform, pipeline } = require("node:stream");
 const btch = require("btch-downloader");
 const { PLATFORMS } = require("../config/platforms");
 const ApiError = require("../utils/ApiError");
 const { requireInputForQueryType, requireHttpUrl, requireNonEmptyString } = require("../utils/validate");
-const withTimeout = require("../utils/withTimeout");
+const { withTimeout, TimeoutError, withDedupe, normalizeError } = require("@boy-offi9-inc/reqkit");
 const TtlCache = require("../utils/ttlCache");
-const { normalizeResult, truncateListResult, hasHandler } = require("../utils/normalizeResult");
+const { normalizeResult, truncateListResult, hasHandler, isHeuristic } = require("../utils/normalizeResult");
+const { assertPublicHostname, createGuardedLookup, parseAllowedHosts } = require("../utils/ssrf");
+const { envInt } = require("../utils/config");
 
 // Applies to platforms with `supportsLimit: true` (youtube-search, pinterest
 // search) — these can return dozens of hits per query, most of which nobody
@@ -19,16 +23,19 @@ const LIST_LIMIT_MAX = 50;
 // platform + input + limit. Cuts repeat upstream calls (and the rate-limiting
 // that comes with them). Only successes are stored. Set CACHE_TTL_MS=0 to
 // turn it off. Keep the TTL short: upstream media links can expire.
-function envInt(name, fallback) {
-  const raw = process.env[name];
-  if (raw === undefined || raw === "") return fallback;
-  const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
-}
 const downloadCache = new TtlCache({
   ttlMs: envInt("CACHE_TTL_MS", 300_000),
   maxEntries: envInt("CACHE_MAX_ENTRIES", 200),
 });
+
+// Optional CDN caching (EDGE_CACHE_SECONDS, default 0 = off). The in-memory
+// cache above is per-process, so on Vercel hit rates are low; this lets the
+// platform's edge cache absorb repeat requests instead. Only ever applied to
+// successful responses. Keep it short — upstream media links expire.
+function applyEdgeCache(res) {
+  const seconds = envInt("EDGE_CACHE_SECONDS", 0);
+  if (seconds > 0) res.set("Cache-Control", `public, s-maxage=${Math.floor(seconds)}`);
+}
 
 function parseLimit(rawLimit) {
   const n = Number.parseInt(rawLimit, 10);
@@ -134,53 +141,18 @@ function buildCandidates(platform, rawQuery, normalizedQuery) {
 const LIST_PLATFORMS = new Set(["youtube-search", "pinterest"]);
 
 /**
- * GET /api/download/:platform?url=...  (or ?query=... for search-based platforms)
- * Generic handler shared by every platform route.
+ * The upstream half of /api/download: try each candidate input against the
+ * library within one shared deadline, validate what comes back, and build the
+ * response body. Throws ApiError on any failure.
  */
-async function download(req, res) {
-  const { platform } = req.params;
-  const input = req.query.url || req.query.query;
-
-  const config = PLATFORMS[platform];
-  if (!config) {
-    throw new ApiError(404, `Unsupported platform "${platform}".`);
-  }
-
-  const paramName = config.queryType === "query" ? "query" : "url";
-  if (input === undefined) {
-    throw new ApiError(400, `Missing required "${paramName}" query parameter. Example: ${config.example}`);
-  }
-  const rawQuery = requireInputForQueryType(input, config.queryType, paramName);
-
-  const appliedLimit = config.supportsLimit ? parseLimit(req.query.limit) : null;
-  const cacheKey = JSON.stringify([platform, rawQuery, appliedLimit]);
-  const cached = downloadCache.get(cacheKey);
-  if (cached) {
-    res.set("X-Cache", "HIT");
-    return res.json(cached);
-  }
-
-  const fn = btch[config.fn];
-  if (typeof fn !== "function") {
-    // Provide a clearer message including available functions for debugging.
-    const available = Object.keys(btch).filter((k) => typeof btch[k] === "function");
-    throw new ApiError(404, `Downloader function "${config.fn}" is not available in btch-downloader. Available: ${available.join(", ")}`);
-  }
-
-  // Normalize a few common URL shapes so downstream downloaders (like YouTube)
-  // receive the canonical form they expect and avoid confusing errors such as
-  // "Invalid search API response" when callers pass a shorts/ or youtu.be link.
-  let normalizedQuery = rawQuery;
-  // Only apply the YouTube normalizations when the platform is youtube or aio —
-  // aio delegates to platform-specific downloaders and benefits from the same fix.
-  if (/(youtube|aio)/i.test(platform)) {
-    normalizedQuery = normalizeInputForDownloader(rawQuery);
-  }
-
+async function resolveDownload(platform, rawQuery, normalizedQuery, appliedLimit) {
+  const fn = btch[PLATFORMS[platform].fn];
   const candidates = buildCandidates(platform, rawQuery, normalizedQuery);
   const totalMs = Number(process.env.DOWNLOAD_TIMEOUT_MS) || 25_000;
   const deadline = Date.now() + totalMs;
-  const mustHaveMedia = hasHandler(platform) && !LIST_PLATFORMS.has(platform);
+  // Heuristic handlers (see normalizeResult.js) are guesses, so an empty
+  // result from them is passed through, not turned into a 502.
+  const mustHaveMedia = hasHandler(platform) && !LIST_PLATFORMS.has(platform) && !isHeuristic(platform);
 
   let data = null;
   let lastError = null;
@@ -191,14 +163,12 @@ async function download(req, res) {
 
     let attempt;
     try {
-      attempt = await withTimeout(
-        fn(candidate),
-        remaining,
-        `The ${platform} downloader took too long to respond.`
-      );
+      attempt = await withTimeout(() => fn(candidate), remaining);
     } catch (err) {
-      if (err.message.endsWith("took too long to respond.")) {
-        throw new ApiError(504, err.message);
+      // Only OUR deadline is a 504; a library that times out internally is an
+      // upstream failure and is reported as a 502 below.
+      if (err instanceof TimeoutError) {
+        throw new ApiError(504, `The ${platform} downloader took too long to respond.`);
       }
       // A plain Error here is the upstream/library failing, not our server
       // crashing — report it as a 502 instead of a generic 500.
@@ -261,26 +231,68 @@ async function download(req, res) {
     normalized: normalizeResult(platform, data),
   };
 
-  downloadCache.set(cacheKey, body);
-  if (downloadCache.enabled) res.set("X-Cache", "MISS");
-  res.json(body);
+  return body;
 }
 
+const resolveOnce = withDedupe(resolveDownload, {
+  keyFn: (platform, rawQuery, _normalizedQuery, appliedLimit) => JSON.stringify([platform, rawQuery, appliedLimit]),
+});
+
 /**
- * Blocks obvious loopback/private/link-local hosts so /api/fetch-media can't
- * be used as an open proxy to reach internal network services. Best-effort
- * (string-based, not DNS-resolved) — good enough against casual misuse.
+ * GET /api/download/:platform?url=...  (or ?query=... for search-based platforms)
+ * Generic handler shared by every platform route.
  */
-function isPrivateHostname(hostname) {
-  const h = hostname.toLowerCase();
-  if (h === "localhost" || h === "::1") return true;
-  if (/^127\./.test(h)) return true;
-  if (/^10\./.test(h)) return true;
-  if (/^192\.168\./.test(h)) return true;
-  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(h)) return true;
-  if (/^169\.254\./.test(h)) return true;
-  if (h === "0.0.0.0") return true;
-  return false;
+async function download(req, res) {
+  const { platform } = req.params;
+  const input = req.query.url || req.query.query;
+
+  const config = PLATFORMS[platform];
+  if (!config) {
+    throw new ApiError(404, `Unsupported platform "${platform}".`);
+  }
+
+  const paramName = config.queryType === "query" ? "query" : "url";
+  if (input === undefined) {
+    throw new ApiError(400, `Missing required "${paramName}" query parameter. Example: ${config.example}`);
+  }
+  const rawQuery = requireInputForQueryType(input, config.queryType, paramName);
+
+  const appliedLimit = config.supportsLimit ? parseLimit(req.query.limit) : null;
+  const cacheKey = JSON.stringify([platform, rawQuery, appliedLimit]);
+  const cached = downloadCache.get(cacheKey);
+  if (cached) {
+    res.set("X-Cache", "HIT");
+    applyEdgeCache(res);
+    return res.json(cached);
+  }
+
+  const fn = btch[config.fn];
+  if (typeof fn !== "function") {
+    // Provide a clearer message including available functions for debugging.
+    const available = Object.keys(btch).filter((k) => typeof btch[k] === "function");
+    console.warn(`btch-downloader: "${config.fn}" is not exported. Available: ${available.join(", ")}`);
+    throw new ApiError(404, `The ${platform} downloader is not available in this build.`);
+  }
+
+  // Normalize a few common URL shapes so downstream downloaders (like YouTube)
+  // receive the canonical form they expect and avoid confusing errors such as
+  // "Invalid search API response" when callers pass a shorts/ or youtu.be link.
+  let normalizedQuery = rawQuery;
+  // Only apply the YouTube normalizations when the platform is youtube or aio —
+  // aio delegates to platform-specific downloaders and benefits from the same fix.
+  if (platform === "youtube" || platform === "aio") {
+    normalizedQuery = normalizeInputForDownloader(rawQuery);
+  }
+
+  // Identical requests that arrive while one is already in flight share a
+  // single upstream call (reqkit's withDedupe) instead of each hitting the
+  // provider — the in-memory cache only helps once the first one has finished.
+  const body = await resolveOnce(platform, rawQuery, normalizedQuery, appliedLimit);
+
+  downloadCache.set(cacheKey, body);
+  if (downloadCache.enabled) res.set("X-Cache", "MISS");
+  applyEdgeCache(res);
+  res.json(body);
 }
 
 /**
@@ -314,6 +326,74 @@ function looksLikeFailurePayload(contentType) {
   return /^(text\/html|application\/json|text\/plain)\b/i.test(contentType || "");
 }
 
+const MAX_REDIRECTS = 5;
+const BROWSER_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+const guardedLookup = createGuardedLookup();
+
+/** Keeps only filename-safe characters so the value can never break out of the header. */
+function safeFileName(value, fallback = "download") {
+  const cleaned = String(value || "").replace(/[^a-zA-Z0-9._-]/g, "_").replace(/^\.+/, "").slice(0, 120);
+  return cleaned || fallback;
+}
+
+/**
+ * One GET to `url` with the SSRF guard attached at connect time. Resolves with
+ * the response (headers received, body unread). `signal` aborts the attempt;
+ * it's only wired to connect + headers (see fetchMedia), so a big,
+ * slow-but-working download isn't killed mid-stream.
+ */
+function requestOnce(url, signal) {
+  return new Promise((resolve, reject) => {
+    const lib = url.protocol === "https:" ? https : http;
+    const req = lib.request(
+      url,
+      {
+        method: "GET",
+        lookup: guardedLookup,
+        signal,
+        headers: {
+          "User-Agent": BROWSER_UA,
+          Accept: "*/*",
+          // No compression: we pass Content-Length straight through, and
+          // media is already compressed.
+          "Accept-Encoding": "identity",
+          Referer: `${url.protocol}//${url.host}/`,
+        },
+      },
+      resolve
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+/** Counts bytes and aborts the stream once `max` is exceeded (for responses with no Content-Length). */
+function byteLimiter(max) {
+  let seen = 0;
+  return new Transform({
+    transform(chunk, _enc, cb) {
+      seen += chunk.length;
+      if (seen > max) {
+        const e = new Error("Media is larger than this server allows.");
+        e.code = "EMEDIA_TOO_LARGE";
+        return cb(e);
+      }
+      cb(null, chunk);
+    },
+  });
+}
+
+function toApiError(err) {
+  if (err instanceof ApiError) return err;
+  const n = normalizeError(err);
+  if (n.isTimeout) return new ApiError(504, "Upstream media host took too long to respond.");
+  if (n.code === "EBLOCKED_ADDRESS") return new ApiError(400, "Refusing to fetch a private/internal address.");
+  if (n.code === "ENOTFOUND" || n.code === "EAI_AGAIN") return new ApiError(502, "Could not resolve the media host.");
+  return new ApiError(502, "Could not reach the media host.");
+}
+
 /**
  * GET /api/fetch-media?url=...&filename=...
  * Streams a direct media URL (as returned inside a /api/download result) back
@@ -321,72 +401,77 @@ function looksLikeFailurePayload(contentType) {
  * triggers a real file save instead of navigating to/opening the raw CDN URL.
  * This also sidesteps CDNs that don't set download-friendly headers themselves,
  * and avoids exposing the raw source URL directly to the client's tab history.
+ *
+ * Safety: private/internal addresses are refused at hostname level AND at
+ * connect time (DNS-rebinding safe); redirects are followed manually, up to
+ * MAX_REDIRECTS, with every hop re-checked; FETCH_MEDIA_ALLOWED_HOSTS can
+ * restrict the route to a fixed set of CDN domains; FETCH_MEDIA_MAX_BYTES
+ * can cap response size.
  */
 async function fetchMedia(req, res) {
   const { url, filename } = req.query;
 
   const parsedUrlString = requireHttpUrl(url, "url");
-  if (filename && filename.trim()) {
+  if (typeof filename === "string" && filename.trim()) {
     // Only validate when a real (non-empty) filename was actually given —
-    // this stays an optional field with a derived fallback, same as before.
+    // this stays an optional field with a derived fallback.
     requireNonEmptyString(filename, "filename", { maxLength: 255 });
   }
 
-  const parsed = new URL(parsedUrlString);
-  if (isPrivateHostname(parsed.hostname)) {
-    throw new ApiError(400, "Refusing to fetch a private/internal address.");
-  }
+  const allowedHosts = parseAllowedHosts(process.env.FETCH_MEDIA_ALLOWED_HOSTS);
+  const connectTimeoutMs = envInt("FETCH_MEDIA_TIMEOUT_MS", 20_000) || 20_000;
+  const maxBytes = envInt("FETCH_MEDIA_MAX_BYTES", 0);
 
-  // Many CDNs (YouTube's googlevideo.com in particular) reject requests that
-  // don't look like they came from a browser, or that lack a matching Referer.
-  // Without these, the CDN can respond 200 with a small HTML/JSON error body
-  // instead of the media — which is exactly what was getting silently saved
-  // as a "broken" file before.
-  //
-  // The abort timer only guards the connect + response-headers phase — it's
-  // cleared the moment headers actually arrive, so a legitimately large file
-  // that's slow-but-successfully streaming isn't killed partway through by
-  // an arbitrary total-transfer cutoff.
-  const controller = new AbortController();
-  const connectTimeoutMs = Number(process.env.FETCH_MEDIA_TIMEOUT_MS) || 20_000;
-  const timeoutTimer = setTimeout(() => controller.abort(), connectTimeoutMs);
-
+  let current = new URL(parsedUrlString);
   let upstream;
-  try {
-    upstream = await fetch(parsed.toString(), {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        Accept: "*/*",
-        Referer: `${parsed.protocol}//${parsed.host}/`,
-      },
-      signal: controller.signal,
-    });
-  } catch (err) {
-    if (err.name === "AbortError") {
-      throw new ApiError(504, "Upstream media host took too long to respond.");
+  for (let hop = 0; ; hop += 1) {
+    assertPublicHostname(current.hostname, { allowedHosts });
+    try {
+      upstream = await withTimeout((signal) => requestOnce(current, signal), connectTimeoutMs);
+    } catch (err) {
+      throw toApiError(err);
     }
-    throw err;
-  } finally {
-    clearTimeout(timeoutTimer);
+
+    const status = upstream.statusCode || 0;
+    const location = upstream.headers.location;
+    if (status >= 300 && status < 400 && location) {
+      upstream.resume(); // discard the redirect body so the socket is freed
+      if (hop >= MAX_REDIRECTS) throw new ApiError(502, "Upstream media host redirected too many times.");
+      try {
+        current = new URL(location, current);
+      } catch {
+        throw new ApiError(502, "Upstream media host sent an invalid redirect.");
+      }
+      if (!/^https?:$/.test(current.protocol)) throw new ApiError(502, "Upstream media host redirected to an unsupported protocol.");
+      continue;
+    }
+    break;
   }
 
-  if (!upstream.ok || !upstream.body) {
-    throw new ApiError(502, `Upstream media host returned ${upstream.status}.`);
+  if (upstream.statusCode < 200 || upstream.statusCode >= 300) {
+    upstream.resume();
+    throw new ApiError(502, `Upstream media host returned ${upstream.statusCode}.`);
   }
 
-  const contentType = upstream.headers.get("content-type") || "application/octet-stream";
-  const contentLength = upstream.headers.get("content-length");
+  const contentType = upstream.headers["content-type"] || "application/octet-stream";
+  const contentLength = Number(upstream.headers["content-length"]);
 
   if (looksLikeFailurePayload(contentType)) {
     // The upstream responded 200 but the body isn't actually media — most
     // likely a block page or error response. Fail loudly instead of handing
     // the client a garbage file.
+    upstream.resume();
     throw new ApiError(502, "Upstream did not return a media file (got a text/HTML/JSON response instead).");
   }
 
-  const baseName = (filename && filename.trim().replace(/[^a-zA-Z0-9._-]/g, "_")) ||
-    (parsed.pathname.split("/").pop() || "download").replace(/\.[a-z0-9]+$/i, "");
+  if (maxBytes > 0 && Number.isFinite(contentLength) && contentLength > maxBytes) {
+    upstream.resume();
+    throw new ApiError(413, "Media is larger than this server allows.");
+  }
+
+  const baseName = safeFileName(
+    (typeof filename === "string" && filename.trim()) || (current.pathname.split("/").pop() || "download").replace(/\.[a-z0-9]+$/i, "")
+  );
 
   // Determine the real extension from the actual response Content-Type,
   // ignoring whatever extension (if any) the client guessed beforehand.
@@ -396,9 +481,16 @@ async function fetchMedia(req, res) {
 
   res.setHeader("Content-Type", contentType);
   res.setHeader("Content-Disposition", `attachment; filename="${safeName}"`);
-  if (contentLength) res.setHeader("Content-Length", contentLength);
+  if (Number.isFinite(contentLength)) res.setHeader("Content-Length", String(contentLength));
 
-  Readable.fromWeb(upstream.body).pipe(res);
+  // pipeline() tears down the upstream socket if the client goes away (and
+  // vice versa) — plain .pipe() would leave it open and leak the connection.
+  const stages = maxBytes > 0 && !Number.isFinite(contentLength) ? [upstream, byteLimiter(maxBytes), res] : [upstream, res];
+  pipeline(...stages, (err) => {
+    if (err && err.code !== "ERR_STREAM_PREMATURE_CLOSE") {
+      console.warn(`fetch-media stream ended early${req.id ? " id=" + req.id : ""}: ${err.message}`);
+    }
+  });
 }
 
 module.exports = { listPlatforms, download, fetchMedia, downloadCache };

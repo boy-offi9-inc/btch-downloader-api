@@ -52,4 +52,14 @@ test("errorHandler: unknown errors become a 500 (and are logged)", () => {
   }
   assert.equal(res.statusCode, 500);
   assert.equal(res.body.error.requestId, undefined);
+  // The real message is logged, never sent to the client.
+  assert.equal(res.body.error.message, "Internal Server Error");
+});
+
+test("errorHandler: 4xx errors from Express/body-parser keep their message", () => {
+  const res = fakeRes();
+  const err = Object.assign(new Error("Unexpected token } in JSON"), { statusCode: 400 });
+  errorHandler(err, {}, res, () => {});
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.body.error.message, "Unexpected token } in JSON");
 });

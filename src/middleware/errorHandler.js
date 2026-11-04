@@ -18,10 +18,15 @@ function errorHandler(err, req, res, next) { // eslint-disable-line no-unused-va
     console.error(`[Unhandled Error]${req.id ? " id=" + req.id : ""}`, err);
   }
 
+  // ApiErrors and 4xx errors from Express/body-parser carry messages that are
+  // safe to show. Anything else that ends up a 500 is an unexpected crash, and
+  // its message can leak internals (paths, library details) — log it, but
+  // send a generic line.
+  const exposeMessage = err instanceof ApiError || statusCode < 500;
   res.status(statusCode).json({
     success: false,
     error: {
-      message: err.message || "Internal Server Error",
+      message: (exposeMessage && err.message) || "Internal Server Error",
       statusCode,
       ...(req.id ? { requestId: req.id } : {}),
     },

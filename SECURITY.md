@@ -1,21 +1,29 @@
 # Security Policy
 
-## Supported Versions
+## Supported versions
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
+Only the latest release on `main` receives fixes.
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
-| 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
+| Version | Supported |
+| ------- | --------- |
+| 1.3.x   | ✅        |
+| < 1.3   | ❌        |
 
-## Reporting a Vulnerability
+## Reporting a vulnerability
 
-Use this section to tell people how to report a vulnerability.
+Please **don't open a public issue** for a security problem. Use GitHub's private
+reporting instead: **Security → Report a vulnerability** on this repository.
 
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+Include what you found, how to reproduce it, and the version/commit. You can expect
+an acknowledgement within a few days and a fix or a clear answer after that. If the
+report is accepted you'll be credited in the release notes (unless you'd rather not
+be); if it's declined you'll get the reason.
+
+## Scope notes
+
+- `/api/fetch-media` streams third-party files through this server. It refuses
+  private/internal addresses (checked at connect time and on every redirect), but
+  on a public deployment you should also set `FETCH_MEDIA_ALLOWED_HOSTS` and keep
+  the rate limits on.
+- This project wraps the `btch-downloader` library and inherits its upstream
+  providers; issues in those providers should be reported to that project.

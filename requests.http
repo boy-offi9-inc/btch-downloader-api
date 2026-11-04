@@ -29,3 +29,15 @@ GET {{baseUrl}}/api/download/not-a-real-platform?url=https://example.com
 
 ### Missing query param (expect 400)
 GET {{baseUrl}}/api/download/tiktok
+
+### Pinterest search with a limit
+GET {{baseUrl}}/api/download/pinterest?url=cats&limit=3
+
+### Deep health check (probes the upstream provider; 503 if it is failing)
+GET {{baseUrl}}/api/health?deep=1
+
+### Stream a media file as a download (replace with a real direct media URL)
+GET {{baseUrl}}/api/fetch-media?url=https://example.com/video.mp4&filename=clip
+
+### Private address is refused (expect 400)
+GET {{baseUrl}}/api/fetch-media?url=http://169.254.169.254/latest/meta-data

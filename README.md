@@ -28,7 +28,10 @@ Fetch public media info/download links from TikTok, Instagram, YouTube, Spotify,
 
 - 🎯 One generic route (`/api/download/:platform`) handles all 17 supported platforms
 - 🧩 Adding a new platform is a one-line change (`src/config/platforms.js`)
-- 🛡️ Centralized error handling, input validation, and rate limiting
+- 🛡️ Centralized error handling, input validation, and rate limiting (with a tighter limit on the file-streaming route)
+- 🔒 SSRF-hardened `/api/fetch-media`: private/IPv6/mapped addresses blocked at connect time, every redirect hop re-checked, optional host allowlist and size cap
+- 🧰 Built on [`@boy-offi9-inc/reqkit`](https://github.com/boy-offi9-inc/reqkit) for timeouts (with real cancellation), concurrent-request dedupe, the LRU cache store and error normalization — fewer home-grown helpers to maintain
+- 🧹 Normalized `{kind, media|items}` view for every platform except `xiaohongshu-profile` (six use a best-effort scan — see below)
 - 🧪 Static frontend tester served at `/` — no separate frontend project needed, fully responsive from small phones to desktop
 - 📦 Clean, conventional Express project layout
 - 🚀 Deploy-ready for Railway, Render, Vercel (serverless), or plain Docker — configs included for all four
@@ -56,12 +59,17 @@ btch-downloader-api/
 │   ├── utils/
 │   │   ├── ApiError.js
 │   │   ├── asyncHandler.js
-│   │   └── ttlCache.js      # in-memory response cache
+│   │   ├── config.js        # CORS_ORIGIN / TRUST_PROXY / env-number parsing
+│   │   ├── normalizeResult.js
+│   │   ├── ssrf.js          # private-address checks + connect-time DNS guard
+│   │   └── ttlCache.js      # TTL + hit/miss stats on top of reqkit's LRU store
 │   ├── app.js               # Express app factory (no listen — reused by every deploy target)
 │   └── index.js             # Local/Railway/Render entry point (calls app.listen)
+├── scripts/
+│   └── check-syntax.js       # `npm run lint` — dependency-free syntax check
 ├── test/                     # node:test suite (npm test)
 ├── .github/
-│   ├── workflows/ci.yml      # Tests + smoke test on push/PR
+│   ├── workflows/ci.yml      # Lint + tests + smoke test on push/PR
 │   ├── dependabot.yml        # Dependency update PRs
 │   └── ISSUE_TEMPLATE/       # Bug report / feature request forms
 ├── .dockerignore
@@ -98,12 +106,18 @@ cp .env.example .env
 | Variable                 | Default | Description                              |
 | ------------------------- | ------- | ----------------------------------------- |
 | `PORT`                    | `3000`  | Port the server listens on                |
-| `CORS_ORIGIN`              | `*`     | Allowed CORS origin(s)                    |
+| `CORS_ORIGIN`              | `*`     | Allowed CORS origin(s) — one, or a comma-separated list |
+| `TRUST_PROXY`              | `1` on Vercel, else off | Reverse-proxy hops to trust for the client IP (keeps rate limiting per-caller) |
 | `RATE_LIMIT_WINDOW_MS`     | `60000` | Rate limit window, in milliseconds        |
 | `RATE_LIMIT_MAX`           | `30`    | Max requests per IP per window            |
 | `DOWNLOAD_TIMEOUT_MS`      | `25000` | Max wait for the downloader library       |
 | `CACHE_TTL_MS`             | `300000`| Cache successful downloads this long (`0` = off) |
 | `CACHE_MAX_ENTRIES`        | `200`   | Max cached responses (oldest evicted)     |
+| `EDGE_CACHE_SECONDS`       | `0`     | Send `Cache-Control: public, s-maxage=N` on successful downloads so a CDN can cache them (`0` = off) |
+| `FETCH_MEDIA_RATE_LIMIT_MAX` | `10`  | Max `/api/fetch-media` requests per IP per window |
+| `FETCH_MEDIA_ALLOWED_HOSTS` | *(any public host)* | Comma-separated hosts (subdomains included) `/api/fetch-media` may fetch from |
+| `FETCH_MEDIA_MAX_BYTES`    | `0`     | Refuse/abort media larger than this (`0` = no cap) |
+| `FETCH_MEDIA_TIMEOUT_MS`   | `20000` | Connect + response-headers timeout for `/api/fetch-media` |
 
 ### 3. Run it
 
@@ -123,7 +137,7 @@ Then open **http://localhost:3000** to use the frontend tester, or call the API 
 Cheap liveness check — this is what Railway/Render/Docker health checks hit.
 
 ```json
-{ "success": true, "status": "ok", "version": "1.1.0", "uptime": 12.4, "cache": { "size": 3, "hits": 5, "misses": 8 } }
+{ "success": true, "status": "ok", "version": "1.3.0", "uptime": 12.4, "cache": { "size": 3, "hits": 5, "misses": 8 } }
 ```
 
 `GET /api/health?deep=1` also runs one real search through the downloader library to check the **upstream provider** is answering. The result is reused for 60 seconds. If the probe fails you get `503` with `"status": "degraded"` and the reason — point an uptime monitor at this URL to be alerted when scraping breaks.
@@ -135,6 +149,7 @@ Cheap liveness check — this is what Railway/Render/Docker health checks hit.
 ### Request IDs and caching
 
 - Every response carries an `X-Request-Id` header (a caller-supplied one is kept if it looks sane). Errors repeat it as `error.requestId`, and it's in the server log line, so a user's report can be matched to the exact request.
+- Identical `/api/download` requests that arrive while one is already running share a single upstream call (reqkit's `withDedupe`), so a burst on one URL can't multiply provider traffic.
 - Successful `/api/download` responses are cached in memory for `CACHE_TTL_MS`. Cached responses carry `X-Cache: HIT` (fresh ones `MISS`). Failures are never cached. On Vercel each serverless instance has its own cache.
 
 ### `GET /api/platforms`
@@ -181,7 +196,9 @@ GET /api/download/tiktok?url=https://www.tiktok.com/@user/video/1234567890
 }
 ```
 
-`normalized` is a consistent, per-platform-verified view built from the raw `result` (see `src/utils/normalizeResult.js`) — either `{ kind: "media", media: [...] }` for a single item, `{ kind: "list", items: [...] }` for search-style results, or `null` for a platform without a dedicated handler yet (the raw `result` is always present regardless).
+`normalized` is a consistent view built from the raw `result` (see `src/utils/normalizeResult.js`) — either `{ kind: "media", media: [...] }` for a single item, `{ kind: "list", items: [...] }` for search-style results, or `null` when nothing usable was found (the raw `result` is always present regardless).
+
+Twelve platforms have handlers written against real captured responses. Six — `spotify`, `xiaohongshu`, `snackvideo`, `cocofun`, `threads`, `kuaishou` — use a **best-effort scan** instead (find every URL in the response, classify by extension/key name) and carry `"heuristic": true` in `normalized`. Treat those as a convenience, not a guarantee, and prefer the raw `result` if they disagree. Because a miss there may just be a wrong guess, an answer with no recognisable links is passed through rather than turned into a `502` (the verified platforms still `502` on an empty answer). `xiaohongshu-profile` has no normalizer; use `result`.
 
 **Example with a limit**
 
@@ -202,7 +219,15 @@ GET /api/download/youtube-search?query=lofi+hip+hop&limit=3
 
 ### `GET /api/fetch-media?url=...&filename=...`
 
-Streams a direct media URL (one returned inside a `/api/download` result) back through this server with a `Content-Disposition: attachment` header, so a browser click triggers a real file save instead of opening the raw CDN link. Also blocks requests to loopback/private-network hosts so the route can't be used as an open internal-network proxy.
+Streams a direct media URL (one returned inside a `/api/download` result) back through this server with a `Content-Disposition: attachment` header, so a browser click triggers a real file save instead of opening the raw CDN link.
+
+Safety rules:
+
+- Loopback, private, link-local (incl. cloud-metadata `169.254.x.x`), CGNAT and reserved addresses are refused for IPv4 **and** IPv6, including IPv4-mapped forms like `::ffff:127.0.0.1`. The check runs on the address actually connected to (so DNS rebinding doesn't get around it), and again on every redirect hop (max 5).
+- `FETCH_MEDIA_ALLOWED_HOSTS` can limit the route to a fixed set of CDN domains. Left unset, it will fetch from any *public* host, so if you expose this API publicly, consider setting it.
+- `FETCH_MEDIA_MAX_BYTES` caps file size; the route also has its own, tighter rate limit (`FETCH_MEDIA_RATE_LIMIT_MAX`).
+- HTML/JSON/text responses are rejected (they are CDN error pages, not media), filenames are sanitised, and the upstream connection is closed if the client disconnects.
+- Error codes: `400` refused address/host, `413` too large, `502` upstream failure or bad redirect, `504` upstream too slow.
 
 **Error response shape** (used consistently across the whole API):
 
@@ -246,7 +271,7 @@ Streams a direct media URL (one returned inside a `/api/download` result) back t
 npm test
 ```
 
-Uses Node's built-in test runner (no extra dependencies). The downloader library is stubbed, so the suite runs offline and never calls a real provider. CI (`.github/workflows/ci.yml`) runs it on Node 20 and 22 for every push and pull request.
+Uses Node's built-in test runner (no extra dependencies). The downloader library is stubbed, so the suite runs offline and never calls a real provider; the `fetch-media` streaming tests run against a throwaway local server. `npm run lint` syntax-checks every file. CI (`.github/workflows/ci.yml`) runs lint + tests on Node 20 and 22 for every push and pull request.
 
 ---
 
@@ -259,7 +284,13 @@ The upstream provider replied successfully but with nothing usable (this is what
 The provider didn't answer within `DOWNLOAD_TIMEOUT_MS`. Retry, or raise the timeout.
 
 **`429`**
-You hit the rate limit (`RATE_LIMIT_MAX` per `RATE_LIMIT_WINDOW_MS`).
+You hit the rate limit (`RATE_LIMIT_MAX` per `RATE_LIMIT_WINDOW_MS`, or `FETCH_MEDIA_RATE_LIMIT_MAX` on `/api/fetch-media`).
+
+**Everyone seems to share one rate limit / `ERR_ERL_UNEXPECTED_X_FORWARDED_FOR` in the logs**
+You're behind a reverse proxy but Express isn't told to trust it. Set `TRUST_PROXY` to the number of proxy hops in front of the app (`1` for Railway/Render; Vercel is handled automatically).
+
+**Browser says the request was blocked by CORS with several origins set**
+`CORS_ORIGIN` takes a comma-separated list, e.g. `https://a.com,https://b.com` (older versions treated the whole string as a single origin).
 
 **Reporting a bug**
 Open an issue and include the **Request ID** shown under the error — it lets the maintainer find your request in the logs.
@@ -285,3 +316,5 @@ The Express app itself (`src/app.js`) is identical across every target below —
 
 1. Import the repo in Vercel. `vercel.json` routes `/api/*` to the serverless function at `api/index.js` (which just re-exports the same Express app) and serves `public/` as static files directly.
 2. No build command needed — Vercel's `@vercel/node` builder bundles `api/index.js` and its dependencies automatically.
+3. The in-memory cache is per serverless instance, so hit rates are low. Set `EDGE_CACHE_SECONDS` (e.g. `120`) to let Vercel's edge cache absorb repeat requests. Keep it short — media links expire.
+4. Serverless functions have response-size and duration limits, so large files through `/api/fetch-media` may be cut off there; Railway, Render or Docker suit big downloads better.

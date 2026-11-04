@@ -7,7 +7,7 @@
  * what actually matters for graceful failure. The two most likely slow
  * paths (the downloader library call, and the upstream fetch in
  * fetchMedia) also have their own more precise timeouts — see
- * withTimeout.js and the AbortController usage in fetchMedia.
+ * reqkit's withTimeout, used by the download controller and fetchMedia.
  */
 function requestTimeout(timeoutMs = Number(process.env.REQUEST_TIMEOUT_MS) || 30_000) {
   return (req, res, next) => {

@@ -1,7 +1,11 @@
+const { createMemoryCache } = require("@boy-offi9-inc/reqkit");
+
 /**
- * Tiny in-memory TTL cache with a size cap (oldest/least-recently-used entry
- * is evicted first). No timers — entries expire lazily on read, so it is safe
- * in serverless environments and never keeps the process alive.
+ * Small TTL layer on top of reqkit's createMemoryCache (which supplies the
+ * size-capped, least-recently-used storage). This adds the two things that
+ * store doesn't have: per-entry expiry and hit/miss counters. No timers —
+ * entries expire lazily on read, so it is safe in serverless environments and
+ * never keeps the process alive.
  *
  * Note: it lives in one process's memory. On Vercel each serverless instance
  * has its own cache; on Railway/Render/Docker it is shared by every request
@@ -14,7 +18,7 @@ class TtlCache {
     this.ttlMs = ttlMs;
     this.maxEntries = maxEntries;
     this.now = now;
-    this.map = new Map();
+    this.store = this.enabled ? createMemoryCache({ maxEntries }) : null;
     this.hits = 0;
     this.misses = 0;
   }
@@ -25,34 +29,27 @@ class TtlCache {
 
   get(key) {
     if (!this.enabled) return undefined;
-    const entry = this.map.get(key);
+    const entry = this.store.get(key); // also marks it most-recently-used
     if (!entry) {
       this.misses += 1;
       return undefined;
     }
     if (entry.expiresAt <= this.now()) {
-      this.map.delete(key);
+      this.store.delete(key);
       this.misses += 1;
       return undefined;
     }
-    // Re-insert so Map order tracks recency (oldest key is always first).
-    this.map.delete(key);
-    this.map.set(key, entry);
     this.hits += 1;
     return entry.value;
   }
 
   set(key, value) {
     if (!this.enabled) return;
-    this.map.delete(key);
-    this.map.set(key, { value, expiresAt: this.now() + this.ttlMs });
-    while (this.map.size > this.maxEntries) {
-      this.map.delete(this.map.keys().next().value);
-    }
+    this.store.set(key, { value, expiresAt: this.now() + this.ttlMs });
   }
 
   clear() {
-    this.map.clear();
+    if (this.store) this.store.clear();
     this.hits = 0;
     this.misses = 0;
   }
@@ -60,7 +57,7 @@ class TtlCache {
   stats() {
     return {
       enabled: this.enabled,
-      size: this.map.size,
+      size: this.store ? this.store.size : 0,
       maxEntries: this.maxEntries,
       ttlMs: this.ttlMs,
       hits: this.hits,

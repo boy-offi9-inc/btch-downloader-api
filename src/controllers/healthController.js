@@ -1,4 +1,4 @@
-const withTimeout = require("../utils/withTimeout");
+const { withTimeout, TimeoutError } = require("@boy-offi9-inc/reqkit");
 const { normalizeResult } = require("../utils/normalizeResult");
 const { version } = require("../../package.json");
 
@@ -20,7 +20,13 @@ async function defaultProbe() {
   // loaded just to report a shallow "ok".
   const btch = require("btch-downloader");
   if (typeof btch.yts !== "function") throw new Error("yts is not available in btch-downloader");
-  const data = await withTimeout(btch.yts("music"), PROBE_TIMEOUT_MS, "Upstream probe timed out.");
+  let data;
+  try {
+    data = await withTimeout(() => btch.yts("music"), PROBE_TIMEOUT_MS);
+  } catch (err) {
+    if (err instanceof TimeoutError) throw new Error("Upstream probe timed out.");
+    throw err;
+  }
   if (!normalizeResult("youtube-search", data)) throw new Error("Upstream answered but returned no results.");
 }
 

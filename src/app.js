@@ -14,9 +14,14 @@ const requestId = require("./middleware/requestId");
 const requestLogger = require("./middleware/requestLogger");
 const requestTimeout = require("./middleware/requestTimeout");
 const securityHeaders = require("./middleware/securityHeaders");
+const { parseCorsOrigin, parseTrustProxy, envInt } = require("./utils/config");
 
 const app = express();
 app.disable("x-powered-by");
+// Behind Vercel/Railway/Render the socket peer is the platform's proxy, so
+// without this every caller shares one IP (and one rate-limit bucket). See
+// TRUST_PROXY in .env.example.
+app.set("trust proxy", parseTrustProxy(process.env.TRUST_PROXY, { onVercel: Boolean(process.env.VERCEL) }));
 
 // --- Core middleware ---
 app.use(requestId); // must come first so every later log line / error has an id
@@ -25,7 +30,7 @@ app.use(requestTimeout());
 app.use(securityHeaders);
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN || "*",
+    origin: parseCorsOrigin(process.env.CORS_ORIGIN),
     // Lets browser clients read these response headers.
     exposedHeaders: ["X-Request-Id", "X-Cache"],
   })
@@ -41,6 +46,17 @@ const limiter = rateLimit({
   message: { success: false, error: { message: "Too many requests, please try again shortly.", statusCode: 429 } },
 });
 app.use("/api", limiter);
+
+// /api/fetch-media streams whole files through this server, so it gets its
+// own, much tighter limit on top of the general one.
+const mediaLimiter = rateLimit({
+  windowMs: envInt("RATE_LIMIT_WINDOW_MS", 60_000) || 60_000,
+  max: envInt("FETCH_MEDIA_RATE_LIMIT_MAX", 10) || 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: { message: "Too many download requests, please try again shortly.", statusCode: 429 } },
+});
+app.use("/api/fetch-media", mediaLimiter);
 
 // --- Static frontend (simple endpoint tester) ---
 // Short maxAge so active development picks up changes reasonably fast,

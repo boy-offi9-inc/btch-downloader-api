@@ -233,6 +233,103 @@ function pinterest(raw) {
   };
 }
 
+
+// --- Heuristic handlers ---------------------------------------------------
+// spotify, xiaohongshu, snackvideo, cocofun, threads and kuaishou do NOT have
+// a handler written against a captured, real response yet. Rather than leave
+// them with no normalized view at all, these use a best-effort scan of the raw
+// response: walk it, collect every URL, and classify each one by file
+// extension / key name. Results are tagged `heuristic: true` so callers (and
+// the frontend) can tell them apart from the per-platform-verified handlers
+// above — and, crucially, an empty heuristic result is NOT treated as an
+// upstream failure (see isHeuristic), because a miss here may just mean the
+// guess was wrong, not that the download failed.
+const SKIP_KEYS = new Set(["developer", "status", "success", "error", "creator"]);
+// Keys are matched as whole words (camelCase / snake_case split, plural "s"
+// dropped) — a plain substring test would let "profile" match "file".
+const THUMB_TOKENS = new Set(["thumb", "thumbnail", "cover", "poster", "preview", "avatar", "artwork", "image", "img"]);
+const LINK_TOKENS = new Set(["download", "video", "audio", "music", "song", "mp3", "mp4", "media", "play", "src", "url", "link", "file", "hd", "sd", "nowm", "nwm", "wm"]);
+
+function keyTokens(key) {
+  return String(key || "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .map((t) => (t.length > 3 && t.endsWith("s") ? t.slice(0, -1) : t));
+}
+const keyIn = (set) => (key) => keyTokens(key).some((t) => set.has(t));
+const isThumbKey = keyIn(THUMB_TOKENS);
+const isLinkKey = keyIn(LINK_TOKENS);
+const TITLE_KEYS = ["title", "caption", "desc", "description", "name", "text", "filename"];
+const AUTHOR_KEYS = ["author", "authorName", "username", "nickname", "artist", "artists", "uploader", "owner"];
+const MAX_SCAN_DEPTH = 6;
+const MAX_SCAN_NODES = 500;
+
+function firstString(obj, keys) {
+  for (const k of keys) {
+    const v = obj[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+    if (Array.isArray(v) && typeof v[0] === "string" && v[0].trim()) return v[0].trim();
+    if (v && typeof v === "object" && typeof v.name === "string" && v.name.trim()) return v.name.trim();
+  }
+  return null;
+}
+
+function scanForMedia(raw) {
+  const found = []; // { key, url }
+  let nodes = 0;
+  (function walk(value, key, depth) {
+    if (nodes++ > MAX_SCAN_NODES || depth > MAX_SCAN_DEPTH || value == null) return;
+    if (typeof value === "string") {
+      if (isUrl(value)) found.push({ key, url: value });
+    } else if (Array.isArray(value)) {
+      value.forEach((v) => walk(v, key, depth + 1));
+    } else if (typeof value === "object") {
+      for (const [k, v] of Object.entries(value)) {
+        if (!SKIP_KEYS.has(k)) walk(v, k, depth + 1);
+      }
+    }
+  })(raw, "", 0);
+
+  let thumbnail = null;
+  let media = [];
+  const thumbs = [];
+  const seen = new Set();
+  for (const { key, url } of found) {
+    if (seen.has(url)) continue;
+    seen.add(url);
+    const type = guessMediaType({ label: key, url });
+    if (isThumbKey(key) && type !== "video" && type !== "audio") {
+      if (!thumbnail) thumbnail = url;
+      thumbs.push({ label: key || "Image", type: "image", url });
+      continue;
+    }
+    // Keep anything we can positively type; for untyped links, only keep
+    // ones whose key name says "this is the thing to download".
+    if (type === "file" && !isLinkKey(key)) continue;
+    media.push({ label: key || "File", type, url });
+  }
+  // Image-only posts (photo carousels, covers-as-content): with no video,
+  // audio or file found, the "thumbnails" ARE the downloadable media.
+  if (!media.length) media = thumbs;
+
+  // Flatten the first object layer (and a nested result/data layer) for title/author.
+  const layers = [raw];
+  for (const k of ["result", "data"]) if (raw && typeof raw[k] === "object" && !Array.isArray(raw[k])) layers.push(raw[k]);
+  if (layers.length > 1 && layers[1] && typeof layers[1].data === "object") layers.push(layers[1].data);
+  let title = null;
+  let author = null;
+  for (const layer of layers) {
+    if (!layer || typeof layer !== "object") continue;
+    title = title || firstString(layer, TITLE_KEYS);
+    author = author || firstString(layer, AUTHOR_KEYS);
+  }
+  return { kind: "media", title, thumbnail, author, media, heuristic: true };
+}
+
+const HEURISTIC_PLATFORMS = new Set(["spotify", "xiaohongshu", "snackvideo", "cocofun", "threads", "kuaishou"]);
+
 const HANDLERS = {
   youtube,
   "youtube-search": youtubeSearch,
@@ -246,6 +343,12 @@ const HANDLERS = {
   douyin,
   soundcloud,
   pinterest,
+  spotify: scanForMedia,
+  xiaohongshu: scanForMedia,
+  snackvideo: scanForMedia,
+  cocofun: scanForMedia,
+  threads: scanForMedia,
+  kuaishou: scanForMedia,
 };
 
 /**
@@ -315,4 +418,13 @@ function hasHandler(platform) {
   return Object.prototype.hasOwnProperty.call(HANDLERS, platform);
 }
 
-module.exports = { normalizeResult, guessMediaType, truncateListResult, hasHandler };
+/**
+ * True for platforms whose handler is a best-effort scan rather than one
+ * written against a real captured response. The download controller does
+ * not turn an empty result from these into a 502 — see scanForMedia above.
+ */
+function isHeuristic(platform) {
+  return HEURISTIC_PLATFORMS.has(platform);
+}
+
+module.exports = { normalizeResult, guessMediaType, truncateListResult, hasHandler, isHeuristic };

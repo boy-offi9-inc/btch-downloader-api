@@ -26,7 +26,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@boy-offi9-inc/reqkit": "^0.5.0",
+    "@boy-offi9-inc/reqkit": "^0.7.1",
     "btch-downloader": "^6.4.0",
     "cors": "^2.8.5",
     "dotenv": "^18.0.5",

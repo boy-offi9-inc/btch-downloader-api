@@ -1,4 +1,4 @@
-const crypto = require("crypto");
+const crypto = require("node:crypto");
 
 // Accept a caller-supplied ID (handy when a gateway/proxy already assigns
 // one) only if it is short and boring — anything else could be used to

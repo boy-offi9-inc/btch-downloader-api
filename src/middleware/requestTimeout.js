@@ -1,3 +1,5 @@
+const { envInt } = require("../utils/config");
+
 /**
  * Sends a clean 504 if a request hasn't finished within timeoutMs, instead
  * of leaving the client hanging indefinitely on a stalled call. This is a
@@ -9,7 +11,7 @@
  * fetchMedia) also have their own more precise timeouts — see
  * reqkit's withTimeout, used by the download controller and fetchMedia.
  */
-function requestTimeout(timeoutMs = Number(process.env.REQUEST_TIMEOUT_MS) || 30_000) {
+function requestTimeout(timeoutMs = envInt("REQUEST_TIMEOUT_MS", 30_000)) {
   return (req, res, next) => {
     const timer = setTimeout(() => {
       if (!res.headersSent) {

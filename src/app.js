@@ -7,7 +7,7 @@ const rateLimit = require("express-rate-limit");
 
 const downloaderRoutes = require("./routes/downloader");
 const asyncHandler = require("./utils/asyncHandler");
-const { downloadCache } = require("./controllers/downloaderController");
+const { downloadCache } = require("./controllers/download");
 const { createHealthHandler } = require("./controllers/healthController");
 const { notFound, errorHandler } = require("./middleware/errorHandler");
 const requestId = require("./middleware/requestId");
@@ -39,8 +39,8 @@ app.use(express.json());
 
 // --- Rate limiting (protects the wrapped downloader endpoints from abuse) ---
 const limiter = rateLimit({
-  windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS) || 60_000,
-  max: Number(process.env.RATE_LIMIT_MAX) || 30,
+  windowMs: envInt("RATE_LIMIT_WINDOW_MS", 60_000) || 60_000,
+  max: envInt("RATE_LIMIT_MAX", 30) || 30,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, error: { message: "Too many requests, please try again shortly.", statusCode: 429 } },

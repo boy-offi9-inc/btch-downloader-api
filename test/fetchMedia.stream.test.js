@@ -17,7 +17,7 @@ Module._load = function (request, ...rest) {
   }
   return originalLoad.call(this, request, ...rest);
 };
-const { fetchMedia } = require("../src/controllers/downloaderController");
+const { fetchMedia } = require("../src/controllers/fetchMedia");
 
 let server;
 let base;

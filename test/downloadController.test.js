@@ -17,7 +17,7 @@ Module._load = function (request, ...rest) {
 process.env.CACHE_TTL_MS = "60000";
 const originalDebug = console.debug;
 console.debug = () => {}; // the controller lists available functions at load
-const { download, downloadCache } = require("../src/controllers/downloaderController");
+const { download, downloadCache } = require("../src/controllers/download");
 console.debug = originalDebug;
 
 test.beforeEach(() => downloadCache.clear());
@@ -198,7 +198,7 @@ test("edge cache: Cache-Control is only sent when EDGE_CACHE_SECONDS is set, on 
 });
 
 // --- fetch-media: refusals that must happen BEFORE any network call ---
-const { fetchMedia } = require("../src/controllers/downloaderController");
+const { fetchMedia } = require("../src/controllers/fetchMedia");
 
 test("fetch-media: private, loopback and metadata addresses are refused with 400", async () => {
   for (const url of ["http://127.0.0.1/a.mp4", "http://localhost:3000/x", "http://[::1]/x", "http://169.254.169.254/latest/meta-data", "http://10.0.0.5/x", "http://[::ffff:127.0.0.1]/x", "http://2130706433/x"]) {

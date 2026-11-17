@@ -1,6 +1,8 @@
 const express = require("express");
 const asyncHandler = require("../utils/asyncHandler");
-const { listPlatforms, download, fetchMedia } = require("../controllers/downloaderController");
+const { listPlatforms } = require("../controllers/platforms");
+const { download } = require("../controllers/download");
+const { fetchMedia } = require("../controllers/fetchMedia");
 
 const router = express.Router();
 

@@ -45,12 +45,16 @@ btch-downloader-api/
 ├── api/
 │   └── index.js             # Vercel serverless entry point (reuses src/app.js)
 ├── public/
-│   └── index.html           # Frontend endpoint tester (served at "/"), fully responsive
+│   ├── index.html           # Frontend endpoint tester (served at "/"), fully responsive
+│   ├── styles.css           # Tester stylesheet (extracted from index.html)
+│   └── app.js               # Tester logic (platforms, fetch flow, media cards, history)
 ├── src/
 │   ├── config/
 │   │   └── platforms.js     # Single source of truth for supported platforms
 │   ├── controllers/
-│   │   └── downloaderController.js
+│   │   ├── download.js      # /api/download/:platform handler + response cache
+│   │   ├── fetchMedia.js    # /api/fetch-media streaming handler
+│   │   └── platforms.js     # /api/platforms listing
 │   ├── middleware/
 │   │   ├── errorHandler.js  # 404 + centralized error responses
 │   │   └── requestId.js     # X-Request-Id on every request

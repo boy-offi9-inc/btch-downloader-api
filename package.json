@@ -36,6 +36,9 @@
   "devDependencies": {
     "nodemon": "^3.1.4"
   },
+  "overrides": {
+    "esbuild": "^0.28.1"
+  },
   "engines": {
     "node": ">=20"
   }
